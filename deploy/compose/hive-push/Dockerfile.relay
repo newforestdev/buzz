@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.7
+# Preserve the pinned official runtime and web assets; replace only the relay.
+FROM rust:1.95-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+ENV BUZZ_SOURCE_SHA=70d2ca7760f5f6d5217e73d4921555bb3ce0c0e8 BUZZ_BUILD_ID=steelbeach-hive-placeholder-filter
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/usr/local/cargo/git --mount=type=cache,id=hive-push-target,target=/build/target \
+    CARGO_BUILD_JOBS=3 cargo build --locked --release -p buzz-relay --bin buzz-relay && cp target/release/buzz-relay /tmp/buzz-relay
+FROM ghcr.io/block/buzz@sha256:36c8367445303b998615abce99b1fcc04ad466ee4df149e5f354fea14b5626f1
+COPY --from=build /tmp/buzz-relay /usr/local/bin/buzz-relay

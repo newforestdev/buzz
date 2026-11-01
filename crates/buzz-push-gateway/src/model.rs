@@ -13,18 +13,22 @@ pub const MAX_ENROLL_REQUEST_BYTES: usize =
 pub const MAX_GRANT_BYTES: usize = 4096;
 pub const MAX_ENDPOINT_HEX_BYTES: usize = 512;
 pub const APNS_RECONNECT_PAYLOAD: &[u8] =
-    br#"{"aps":{"alert":{"body":"Reconnect to your relay now"},"mutable-content":1}}"#;
+    br#"{"aps":{"alert":{"body":"New message"},"mutable-content":1}}"#;
 pub const WIRE_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AppProfile {
     BuzzIosDogfood,
+    BuzzIosSandbox,
+    BuzzIosProduction,
 }
 impl AppProfile {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BuzzIosDogfood => "buzz-ios-dogfood",
+            Self::BuzzIosSandbox => "buzz-ios-sandbox",
+            Self::BuzzIosProduction => "buzz-ios-production",
         }
     }
 }

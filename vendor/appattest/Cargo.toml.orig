@@ -1,0 +1,29 @@
+[package]
+name = "appattest"
+version = "0.1.1"
+edition = "2021"
+authors = ["Peter Farr <Peter@PrismaPhonic.com>"]
+license = "MIT"
+repository = "https://github.com/PrismaPhonic/appattest"
+readme = "README.md"
+description = "Verification of Apple App Attestations and Assertions, to help enforce iOS App Integrity Checks"
+keywords = ["apple", "appattest", "ios", "attestation", "devicecheck"]
+categories = ["authentication", "cryptography"]
+
+[dependencies]
+byteorder = "1.5"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"], optional = true }
+base64 = "0.22"
+openssl = { version = "0.10", optional = true }
+aws-lc-rs = { version = "1", default-features = false }
+arrayvec = "0.7"
+minicbor = "0.25"
+rustls-pki-types = "1"
+ciborium = { version = "0.2", optional = true }
+p256 = { version = "0.13", optional = true }
+webpki = { package = "rustls-webpki", version = "0.103.9", default-features = false, features = ["aws-lc-rs", "alloc"] }
+
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
+testing = ["dep:p256", "dep:ciborium", "dep:openssl"]

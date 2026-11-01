@@ -31,16 +31,18 @@ fn parsed_configuration_reaches_executable_verifier() {
                     env!("CARGO_MANIFEST_DIR")
                 ),
             ),
-            // Startup stops immediately after configuring the real verifier.
-            ("BUZZ_PUSH_DOGFOOD_APNS_CERT_PATH", "".into()),
+            // A valid fixture lets startup construct both profile runtimes and
+            // reach the verifier configuration log before the unused DB URL fails.
+            (
+                "BUZZ_PUSH_DOGFOOD_APNS_CERT_PATH",
+                format!(
+                    "{}/tests/fixtures/apns-test-identity.pem",
+                    env!("CARGO_MANIFEST_DIR")
+                ),
+            ),
             ("BUZZ_PUSH_DOGFOOD_APNS_TOPIC", "test.app".into()),
             ("RUST_LOG", "info".into()),
         ]);
-        // A directory cannot be read as an APNs certificate, on every platform.
-        command.env(
-            "BUZZ_PUSH_DOGFOOD_APNS_CERT_PATH",
-            env!("CARGO_MANIFEST_DIR"),
-        );
         if let Some(setting) = setting {
             command.env("BUZZ_PUSH_APP_ATTEST_ENVIRONMENT", setting);
         }

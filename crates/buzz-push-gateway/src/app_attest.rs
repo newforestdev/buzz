@@ -113,16 +113,24 @@ impl AppAttestVerifier {
         challenge: &str,
         stored_challenge: &str,
     ) -> Result<VerifiedAssertion, AppAttestError> {
-        let cbor = STANDARD
-            .decode(assertion_b64)
-            .map_err(|_| AppAttestError::Invalid)?;
+        let cbor = STANDARD.decode(assertion_b64).map_err(|error| {
+            tracing::warn!(error = ?error, "App Attest assertion base64 decode failed");
+            AppAttestError::Invalid
+        })?;
         if cbor.is_empty() || cbor.len() > MAX_ASSERTION_BYTES {
+            tracing::warn!(size = cbor.len(), "App Attest assertion size rejected");
             return Err(AppAttestError::Invalid);
         }
-        let counter = assertion_counter(&cbor)?;
+        let counter = assertion_counter(&cbor).map_err(|reason| {
+            tracing::warn!(reason, "App Attest assertion counter parse failed");
+            AppAttestError::Invalid
+        })?;
         let client_data_hash = Sha256::digest(client_data);
-        Assertion::from_assertion(&cbor)
-            .map_err(|_| AppAttestError::Invalid)?
+        let assertion = Assertion::from_assertion(&cbor).map_err(|error| {
+            tracing::warn!(error = ?error, "App Attest assertion CBOR parse failed");
+            AppAttestError::Invalid
+        })?;
+        assertion
             .verify(
                 client_data_hash,
                 challenge,
@@ -131,7 +139,10 @@ impl AppAttestVerifier {
                 previous_counter,
                 stored_challenge,
             )
-            .map_err(|_| AppAttestError::Invalid)?;
+            .map_err(|error| {
+                tracing::warn!(error = ?error, "App Attest assertion verification failed");
+                AppAttestError::Invalid
+            })?;
         Ok(VerifiedAssertion { counter })
     }
 }
@@ -213,29 +224,51 @@ fn verify_attestation_environment(
     Ok(())
 }
 
-/// App Attest assertion CBOR is a closed two-field map. Extracting signCount
-/// from authenticatorData is safe only after the library verifies the same
-/// bytes' RP ID, signature, and monotonic relation.
-fn assertion_counter(cbor: &[u8]) -> Result<u32, AppAttestError> {
+/// Extract signCount from authenticatorData. Unknown CBOR fields are skipped
+/// to match the App Attest library's parser; the library still verifies the
+/// same bytes' RP ID, signature, and monotonic relation before this is used.
+fn assertion_counter(cbor: &[u8]) -> Result<u32, &'static str> {
     let mut d = minicbor::Decoder::new(cbor);
     let count = d
         .map()
-        .map_err(|_| AppAttestError::Invalid)?
-        .ok_or(AppAttestError::Invalid)?;
+        .map_err(|_| "invalid-map")?
+        .ok_or("indefinite-map")?;
+    if count > 8 {
+        return Err("too-many-fields");
+    }
     let mut auth = None;
+    let mut signature_seen = false;
     for _ in 0..count {
-        let k = d.str().map_err(|_| AppAttestError::Invalid)?;
+        let k = d.str().map_err(|_| "invalid-key")?;
         match k {
-            "authenticatorData" => auth = Some(d.bytes().map_err(|_| AppAttestError::Invalid)?),
-            "signature" => {
-                d.bytes().map_err(|_| AppAttestError::Invalid)?;
+            "authenticatorData" if auth.is_none() => {
+                auth = Some(d.bytes().map_err(|_| "invalid-authenticator-data")?);
             }
-            _ => return Err(AppAttestError::Invalid),
+            "authenticatorData" => return Err("duplicate-authenticator-data"),
+            "signature" => {
+                if signature_seen {
+                    return Err("duplicate-signature");
+                }
+                d.bytes().map_err(|_| "invalid-signature")?;
+                signature_seen = true;
+            }
+            _ => d.skip().map_err(|_| "invalid-extension")?,
         }
     }
-    let auth = auth
-        .filter(|a| a.len() == 37)
-        .ok_or(AppAttestError::Invalid)?;
+    if d.position() != cbor.len() {
+        return Err("trailing-data");
+    }
+    if !signature_seen {
+        return Err("missing-signature");
+    }
+    let auth = auth.ok_or("missing-authenticator-data")?;
+    if auth.len() < 37 {
+        tracing::warn!(
+            authenticator_data_length = auth.len(),
+            "App Attest assertion authenticator data is too short"
+        );
+        return Err("invalid-authenticator-data-length");
+    }
     Ok(BigEndian::read_u32(&auth[33..37]))
 }
 

@@ -108,6 +108,16 @@ async fn fixture() -> (axum::Router, Keys, Vec<u8>, Arc<AtomicUsize>) {
             ),
             transport: Arc::new(TestTransport(sends.clone())),
         }),
+        production_profile: Arc::new(ProfileRuntime {
+            app_attest: Arc::new(
+                AppAttestVerifier::new(
+                    "TEAMID.xyz.block.buzz.dogfood.mobile".into(),
+                    include_bytes!("../tests/fixtures/apple-app-attestation-root.pem").to_vec(),
+                )
+                .unwrap(),
+            ),
+            transport: Arc::new(TestTransport(sends.clone())),
+        }),
         max_grant_lifetime_seconds: 600,
         max_installation_lifetime_seconds: 600,
         endpoint_quota_window_seconds: 60,

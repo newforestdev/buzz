@@ -342,7 +342,11 @@ fn push_descriptor(
             "pubkey": relay_keypair.public_key().to_hex(),
             "current": true
         }],
-        "app_profiles": [{"id": "buzz-ios-dogfood", "transport": "apns"}],
+        "app_profiles": [
+            {"id": "buzz-ios-dogfood", "transport": "apns"},
+            {"id": "buzz-ios-sandbox", "transport": "apns"},
+            {"id": "buzz-ios-production", "transport": "apns"}
+        ],
         "push_kinds": crate::handlers::push_lease::PUSH_KINDS,
         "h_grammar": "uuid-v4-lowercase",
         "class_support": {"apns": ["default"]},

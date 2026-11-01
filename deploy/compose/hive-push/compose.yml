@@ -1,0 +1,49 @@
+name: hive-push
+services:
+  push-postgres:
+    image: postgres:17-alpine
+    env_file: ${HIVE_PUSH_SECRETS_DIR:?set HIVE_PUSH_SECRETS_DIR}/postgres.env
+    volumes:
+      - push-database:/var/lib/postgresql/data
+      - ${HIVE_PUSH_SECRETS_DIR}/init.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [push-private]
+  push-migrate:
+    image: steelbeach/buzz-push-gateway:hive
+    command: [--migrate-only]
+    env_file: ${HIVE_PUSH_SECRETS_DIR}/migration.env
+    depends_on:
+      push-postgres:
+        condition: service_healthy
+    networks: [push-private]
+    restart: "no"
+  push-gateway:
+    image: steelbeach/buzz-push-gateway:hive
+    # The key stays mode 0600, owned by the Mac user, on its read-only bind mount.
+    user: "${HIVE_PUSH_UID:-501}:${HIVE_PUSH_GID:-20}"
+    env_file: ${HIVE_PUSH_SECRETS_DIR}/gateway.env
+    volumes:
+      - ${HIVE_PUSH_SECRETS_DIR}/apns-provider.p8:/run/secrets/apns-provider.p8:ro
+      - ${HIVE_PUSH_SECRETS_DIR}/apns-provider-production.p8:/run/secrets/apns-provider-production.p8:ro
+      - ${HIVE_PUSH_SECRETS_DIR}/apple-app-attestation-root.pem:/run/secrets/apple-root.pem:ro
+    ports:
+      - "127.0.0.1:3002:8080"
+      - "127.0.0.1:3003:8081"
+    depends_on:
+      push-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [push-private, relay-network]
+networks:
+  push-private:
+    internal: true
+  relay-network:
+    external: true
+    name: ${HIVE_PUSH_RELAY_NETWORK:?set HIVE_PUSH_RELAY_NETWORK}
+volumes:
+  push-database:

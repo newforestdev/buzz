@@ -1,0 +1,7 @@
+# Temporary localhost-only database port for the native PostgreSQL integration tests.
+services:
+  push-postgres:
+    ports: ["127.0.0.1:5544:5432"]
+    networks: [push-private, integration-test]
+networks:
+  integration-test: {}

@@ -26,6 +26,7 @@ web/dist/
 .env.*
 !.env.example
 *.pem
+*.p8
 *.key
 secrets/
 
@@ -52,3 +53,6 @@ docs/
 docker-compose.yml
 docker-compose.*.yml
 prometheus.yml
+
+# Local Hermit dependency cache is never part of the runtime image.
+.hermit/

@@ -17,6 +17,36 @@ use std::{
     },
 };
 use tracing_subscriber::EnvFilter;
+
+fn build_profile(
+    configured: &buzz_push_gateway::config::AppProfileConfig,
+    app_attest_root: &[u8],
+) -> Result<buzz_push_gateway::http::ProfileRuntime, Box<dyn std::error::Error>> {
+    let app_attest = AppAttestVerifier::with_environment(
+        configured.app_attest_app_id.clone(),
+        app_attest_root.to_vec(),
+        configured.app_attest_environment,
+    )?;
+    let transport = Arc::new(match &configured.apns_token {
+        Some(credentials) => ApnsTransport::token(
+            &fs::read(&credentials.key_path)?,
+            &credentials.key_id,
+            &credentials.team_id,
+            configured.apns_topic.clone(),
+            configured.apns_environment,
+        )?,
+        None => ApnsTransport::certificate(
+            &fs::read(&configured.apns_cert_path)?,
+            configured.apns_topic.clone(),
+            configured.apns_environment,
+        )?,
+    });
+    Ok(buzz_push_gateway::http::ProfileRuntime {
+        app_attest: Arc::new(app_attest),
+        transport,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -36,24 +66,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = Config::from_env()?;
     let metrics_handle = buzz_push_gateway::metrics::install()?;
     let app_attest_root = fs::read(&c.app_attest_root_cert_path)?;
-    let configured = &c.profile;
-    let profile = {
-        let apple = AppAttestVerifier::with_environment(
-            configured.app_attest_app_id.clone(),
-            app_attest_root,
-            configured.app_attest_environment,
-        )?;
-        tracing::info!(environment = ?apple.environment(), "App Attest verifier configured");
-        let transport = Arc::new(ApnsTransport::certificate(
-            &fs::read(&configured.apns_cert_path)?,
-            configured.apns_topic.clone(),
-            configured.apns_environment,
-        )?);
-        buzz_push_gateway::http::ProfileRuntime {
-            app_attest: Arc::new(apple),
-            transport,
-        }
-    };
+    let mut production_config = c.profile.clone();
+    production_config.apns_environment = buzz_push_gateway::config::ApnsEnvironment::Production;
+    if let Some(credentials) = &c.production_apns_token {
+        production_config.apns_token = Some(credentials.clone());
+    }
+    let profile = Arc::new(build_profile(&c.profile, &app_attest_root)?);
+    let production_profile = Arc::new(build_profile(&production_config, &app_attest_root)?);
+    tracing::info!(
+        environment = ?c.profile.app_attest_environment,
+        "App Attest verifier configured"
+    );
     let grant_keyring = GrantKeyring::new(
         c.grant_keys
             .iter()
@@ -96,7 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             grant_keyring: Arc::new(grant_keyring),
             authority,
             token_keyring: Arc::new(token_keyring),
-            profile: Arc::new(profile),
+            profile,
+            production_profile,
             max_grant_lifetime_seconds: c.max_grant_lifetime_seconds,
             max_installation_lifetime_seconds: c.max_installation_lifetime_seconds,
             endpoint_quota_window_seconds: c.endpoint_quota_window_seconds,

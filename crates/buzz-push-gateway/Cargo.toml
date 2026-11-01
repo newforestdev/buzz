@@ -27,6 +27,7 @@ async-trait = "0.1"
 base64 = "0.22"
 byteorder = "1.5"
 minicbor = "0.25"
+jsonwebtoken = { workspace = true, features = ["use_pem"] }
 chrono = { workspace = true }
 hex = { workspace = true }
 getrandom = "0.4"

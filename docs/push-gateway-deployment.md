@@ -30,17 +30,13 @@ the server-owned APNs topic, certificate-backed connection pool, and
 environment. No client request or relay grant can supply or override an APNs
 topic.
 
-This MVP has exactly one compiled-in application profile,
-`buzz-ios-dogfood`. The chart value
-`profiles.dogfood.appAttestAppId` is rendered as
-`BUZZ_PUSH_DOGFOOD_APP_ATTEST_APP_ID`; the gateway rejects startup when it is
-missing or empty. The exact `TEAMID.bundle-id` is environment-owned,
-non-secret deployment configuration. The chart's production values file leaves
-it empty deliberately so a production renderer must supply it from the GitOps
-environment rather than baking a Block team identifier into this repository.
-Supporting another application identity requires an explicit code, schema,
-chart, credential, and deployment change; this gateway does not currently
-select among multiple application profiles.
+The private Steelbeach gateway accepts `buzz-ios-dogfood` and
+`buzz-ios-sandbox` with the sandbox APNs transport, and
+`buzz-ios-production` with the production APNs transport. All three profiles
+are verified against the same server-owned Steelbeach `TEAMID.bundle-id`;
+profile selection never supplies or overrides the App Attest identity or APNs
+topic. The chart's `profiles.dogfood.appAttestAppId` value remains deployment
+owned and must be set to the exact Apple App Attest application identifier.
 
 Optional endpoint quota policy variables are `BUZZ_PUSH_ENDPOINT_QUOTA_WINDOW_SECONDS` (default `10`, max `86400`) and `BUZZ_PUSH_ENDPOINT_QUOTA_MAX_DELIVERIES` (default `10`, max `10000`). These are Buzz policy hypotheses, not Apple-published limits; tune under load while retaining a hard ceiling.
 
@@ -59,8 +55,9 @@ credential ID, and counter. This is not a simulator or attestation bypass.
 Set `BUZZ_PUSH_DOGFOOD_APP_ATTEST_APP_ID` to the personal `TEAMID.bundle-id`,
 `BUZZ_PUSH_DOGFOOD_APNS_TOPIC` to that same bundle ID,
 `BUZZ_PUSH_DOGFOOD_APNS_ENVIRONMENT=sandbox`, and supply its APNs certificate.
-This isolated stack reuses the single `buzz-ios-dogfood` wire profile for its
-server-owned personal identity; it does not add a production application profile.
+This isolated stack uses `buzz-ios-dogfood` and `buzz-ios-sandbox` for its
+server-owned personal identity. It also supports `buzz-ios-production`, routed
+to APNs production for TestFlight installations.
 Do not point distributed dogfood clients at this personal gateway.
 
 Build the mobile client with the personal team and parent bundle ID, its matching

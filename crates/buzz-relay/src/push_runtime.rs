@@ -247,6 +247,9 @@ fn match_job(
     job: &buzz_db::push::BatchedMatch,
     context: &MatchContext,
 ) -> anyhow::Result<Vec<buzz_db::push::WakeRequest>> {
+    if !is_pushable_message(&job.event.event) {
+        return Ok(Vec::new());
+    }
     let mut wakes = Vec::new();
     for lease in &context.leases {
         let author_hex = hex::encode(&lease.author);
@@ -310,6 +313,37 @@ fn match_job(
         });
     }
     Ok(wakes)
+}
+
+/// Avoid waking devices for empty message placeholders and the standalone dot
+/// used by the orchestrator while it is preparing a reply. Attachment-only
+/// messages remain eligible because their payload is carried by tags.
+fn is_pushable_message(event: &nostr::Event) -> bool {
+    let kind = buzz_core::kind::event_kind_u32(event);
+    if !matches!(kind, 9 | 40_002) {
+        return true;
+    }
+    if event
+        .tags
+        .iter()
+        .any(|tag| matches!(tag.kind().to_string().as_str(), "imeta" | "url" | "image"))
+    {
+        return true;
+    }
+
+    let content = normalized_preview_text(&event.content);
+    !content.is_empty() && !(kind == 9 && content == ".")
+}
+
+/// Mirrors the notification extension's removal of control characters and
+/// whitespace folding without retaining any message content for logging.
+fn normalized_preview_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_control() || character.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Match-time counterpart of REQ's filter-level `#p` authorization gate.
@@ -682,6 +716,77 @@ mod tests {
     use serde_json::Value;
     use std::{future::IntoFuture, sync::Arc};
     use tokio::sync::Mutex;
+
+    fn push_context(author: &nostr::Keys) -> MatchContext {
+        MatchContext {
+            leases: vec![buzz_db::push::MatchLease {
+                author: author.public_key().to_bytes().to_vec(),
+                installation_id: "installation".into(),
+                generation: 1,
+                subscriptions: serde_json::json!([{
+                    "filter": {"kinds": [9]},
+                    "class": "mention",
+                    "ignore": [],
+                    "suppress": null
+                }]),
+                expires_at: Utc::now().timestamp() + 3600,
+            }],
+            memberships: std::collections::HashSet::new(),
+        }
+    }
+
+    fn match_job_for(event: nostr::Event) -> buzz_db::push::BatchedMatch {
+        buzz_db::push::BatchedMatch {
+            event: buzz_core::StoredEvent::new(event, None),
+            attempt: 1,
+        }
+    }
+
+    #[test]
+    fn empty_orchestrator_placeholder_does_not_create_a_push_wake() {
+        let sender = nostr::Keys::generate();
+        let recipient = nostr::Keys::generate();
+        let placeholder = EventBuilder::new(Kind::Custom(9), "  \n\t")
+            .sign_with_keys(&sender)
+            .unwrap();
+
+        let wakes = match_job(&match_job_for(placeholder), &push_context(&recipient)).unwrap();
+        assert!(wakes.is_empty());
+    }
+
+    #[test]
+    fn standalone_dot_placeholder_does_not_create_a_push_wake() {
+        let sender = nostr::Keys::generate();
+        let recipient = nostr::Keys::generate();
+        let placeholder = EventBuilder::new(Kind::Custom(9), ".")
+            .sign_with_keys(&sender)
+            .unwrap();
+
+        let wakes = match_job(&match_job_for(placeholder), &push_context(&recipient)).unwrap();
+        assert!(wakes.is_empty());
+    }
+
+    #[test]
+    fn real_reply_after_placeholder_still_creates_a_push_wake() {
+        let sender = nostr::Keys::generate();
+        let recipient = nostr::Keys::generate();
+        let reply = EventBuilder::new(Kind::Custom(9), "The response is ready.")
+            .sign_with_keys(&sender)
+            .unwrap();
+
+        let wakes = match_job(&match_job_for(reply), &push_context(&recipient)).unwrap();
+        assert_eq!(wakes.len(), 1);
+    }
+
+    #[test]
+    fn attachment_only_message_remains_pushable() {
+        let sender = nostr::Keys::generate();
+        let attachment = EventBuilder::new(Kind::Custom(9), "")
+            .tag(Tag::parse(["imeta", "url https://example.test/file.png"]).unwrap())
+            .sign_with_keys(&sender)
+            .unwrap();
+        assert!(is_pushable_message(&attachment));
+    }
 
     #[test]
     fn gift_wrap_match_requires_self_p_filter_and_recipient() {

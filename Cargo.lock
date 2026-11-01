@@ -161,8 +161,6 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "appattest"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d0a66767aaf7d483c556386fb68ca2fba9347684d8bb17a4bd8b755851870f7"
 dependencies = [
  "arrayvec",
  "aws-lc-rs",
@@ -1398,6 +1396,7 @@ dependencies = [
  "chrono",
  "getrandom 0.4.3",
  "hex",
+ "jsonwebtoken",
  "metrics",
  "metrics-exporter-prometheus",
  "minicbor",

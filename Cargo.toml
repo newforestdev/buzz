@@ -38,6 +38,7 @@ members = [
 exclude = ["desktop/src-tauri"]
 resolver = "2"
 
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
@@ -189,6 +190,7 @@ strip = true
 # (FULL_URI + token-file + Authorization header, refresh-safe, with a loopback
 # allowlist for the auth token). Revert to crates.io once #449 lands upstream.
 [patch.crates-io]
+appattest = { path = "vendor/appattest" }
 aws-creds = { git = "https://github.com/tlongwell-block/rust-s3", rev = "c9fce3620dd434c1f810101d672cf384268dbb0f" }
 # MeshLLM 0.76 uses rusqlite 0.40 / libsqlite3-sys 0.38. SQLx 0.9.0's
 # optional SQLite driver still caps libsqlite3-sys below 0.38, which Cargo

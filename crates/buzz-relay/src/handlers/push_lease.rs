@@ -491,10 +491,20 @@ pub async fn accept(
     let limits = LeaseLimits {
         expected_origin: &origin,
         author_hex: &author_hex,
-        app_profiles: &[AppProfile {
-            id: "buzz-ios-dogfood",
-            transport: "apns",
-        }],
+        app_profiles: &[
+            AppProfile {
+                id: "buzz-ios-dogfood",
+                transport: "apns",
+            },
+            AppProfile {
+                id: "buzz-ios-sandbox",
+                transport: "apns",
+            },
+            AppProfile {
+                id: "buzz-ios-production",
+                transport: "apns",
+            },
+        ],
         supported_classes: &["default"],
         push_kinds: PUSH_KINDS,
         max_subscriptions: 16,

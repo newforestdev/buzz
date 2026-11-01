@@ -47,15 +47,25 @@ pub struct AppState {
     pub grant_keyring: Arc<GrantKeyring>,
     pub authority: Arc<dyn AuthorityStore>,
     pub token_keyring: Arc<TokenKeyring>,
-    /// Server-owned dogfood application identity and APNs transport. The wire
-    /// profile selector is fixed and App Attest verifies the configured app ID.
+    /// Server-owned sandbox APNs transport. The legacy dogfood profile remains
+    /// an alias for the same sandbox runtime.
     pub profile: Arc<ProfileRuntime>,
+    /// TestFlight APNs production transport for the same signed Steelbeach app.
+    pub production_profile: Arc<ProfileRuntime>,
     pub max_grant_lifetime_seconds: i64,
     pub max_installation_lifetime_seconds: i64,
     pub endpoint_quota_window_seconds: i64,
     pub endpoint_quota_max_deliveries: i64,
     pub now: fn() -> i64,
     pub accepting: Arc<AtomicBool>,
+}
+
+fn profile_runtime(s: &AppState, profile: AppProfile) -> &Arc<ProfileRuntime> {
+    if profile == AppProfile::BuzzIosProduction {
+        &s.production_profile
+    } else {
+        &s.profile
+    }
 }
 fn error(status: StatusCode, code: &'static str) -> Response {
     (status, Json(ErrorBody { error: code })).into_response()
@@ -209,9 +219,6 @@ async fn enroll(State(s): State<AppState>, body: Bytes) -> Response {
         Some(v) => v,
         None => return error(StatusCode::BAD_REQUEST, "invalid_request"),
     };
-    if r.app_profile != AppProfile::BuzzIosDogfood {
-        return error(StatusCode::BAD_REQUEST, "invalid_request");
-    }
     if r.v != WIRE_VERSION
         || r.endpoint_epoch != 1
         || r.expires_at <= now
@@ -238,15 +245,13 @@ async fn enroll(State(s): State<AppState>, body: Bytes) -> Response {
         Some(v) => v,
         None => return error(StatusCode::BAD_REQUEST, "invalid_request"),
     };
-    let verified =
-        match s
-            .profile
-            .app_attest
-            .verify_attestation(&r.attestation, &r.key_id, signed.as_bytes())
-        {
-            Ok(value) => value,
-            Err(_) => return error(StatusCode::UNAUTHORIZED, "invalid_attestation"),
-        };
+    let verified = match profile_runtime(&s, r.app_profile)
+        .app_attest
+        .verify_attestation(&r.attestation, &r.key_id, signed.as_bytes())
+    {
+        Ok(value) => value,
+        Err(_) => return error(StatusCode::UNAUTHORIZED, "invalid_attestation"),
+    };
     let fingerprint = endpoint_fingerprint(r.app_profile, &token);
     match s
         .authority
@@ -337,13 +342,9 @@ async fn verify_installation_assertion<T: serde::Serialize>(
         s.authority.installation(installation_id, now).await
     }
     .map_err(authority_error)?;
-    if installation.profile != AppProfile::BuzzIosDogfood {
-        return Err(error(StatusCode::NOT_FOUND, "not_authorized"));
-    }
     let transcript = transcript(domain, signed)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid_request"))?;
-    let verified = s
-        .profile
+    let verified = profile_runtime(s, installation.profile)
         .app_attest
         .verify_assertion(
             assertion,
@@ -743,15 +744,7 @@ async fn deliver(
             .await;
         return error(StatusCode::NOT_FOUND, "invalid_grant");
     }
-    if permit.authority.profile != AppProfile::BuzzIosDogfood {
-        crate::metrics::record_delivery_error("profile_disabled");
-        let _ = s
-            .authority
-            .finish_delivery(permit, DeliveryDisposition::Retryable)
-            .await;
-        return error(StatusCode::SERVICE_UNAVAILABLE, "configuration_fault");
-    }
-    let transport = Arc::clone(&s.profile.transport);
+    let transport = Arc::clone(&profile_runtime(&s, permit.authority.profile).transport);
     let endpoint = match s.token_keyring.open(&permit.authority.token_ciphertext) {
         Ok(token) => hex::encode(token),
         Err(_) => {
@@ -768,11 +761,17 @@ async fn deliver(
         expires_at: r.expires_at,
     };
     let authority_store = Arc::clone(&s.authority);
+    let profile = permit.authority.profile.as_str();
     // Admission already committed, so cancellation cannot undo either replay
     // fence. The detached task completes disposition bookkeeping.
     let delivery = tokio::spawn(async move {
         let started = std::time::Instant::now();
         let outcome = transport.send(attempt, &endpoint).await;
+        if outcome == DeliveryOutcome::Accepted {
+            tracing::info!(profile, outcome = ?outcome, "APNs push attempt completed");
+        } else {
+            tracing::warn!(profile, outcome = ?outcome, "APNs push attempt completed");
+        }
         crate::metrics::record_apns_delivery(outcome, started.elapsed().as_secs_f64());
         let disposition = match outcome {
             DeliveryOutcome::Retry { .. } | DeliveryOutcome::ConfigurationFault => {
@@ -925,6 +924,7 @@ mod request_limit_tests {
             include_bytes!("../tests/fixtures/apple-app-attestation-root.pem").to_vec(),
         )
         .expect("pinned Apple root fixture");
+        let app_attest = Arc::new(app_attest);
         AppState {
             grant_keyring: Arc::new(
                 GrantKeyring::new(vec![GrantKey::new("test", &[1; 32]).unwrap()]).unwrap(),
@@ -934,7 +934,11 @@ mod request_limit_tests {
                 TokenKeyring::new(vec![TokenKey::new("test", &[2; 32]).unwrap()]).unwrap(),
             ),
             profile: Arc::new(ProfileRuntime {
-                app_attest: Arc::new(app_attest),
+                app_attest: app_attest.clone(),
+                transport: Arc::new(NeverTransport),
+            }),
+            production_profile: Arc::new(ProfileRuntime {
+                app_attest,
                 transport: Arc::new(NeverTransport),
             }),
             max_grant_lifetime_seconds: 86_400,

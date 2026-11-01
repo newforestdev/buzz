@@ -14,8 +14,21 @@ pub struct AppProfileConfig {
     /// Exact Apple attestation environment accepted for enrollment.
     pub app_attest_environment: AppAttestEnvironment,
     pub apns_cert_path: PathBuf,
+    /// Optional ES256 provider credentials; mutually exclusive with a certificate.
+    pub apns_token: Option<ApnsTokenConfig>,
     pub apns_topic: String,
     pub apns_environment: ApnsEnvironment,
+}
+
+/// Mounted APNs provider key and its non-secret Apple identifiers.
+#[derive(Debug, Clone)]
+pub struct ApnsTokenConfig {
+    /// Read-only path to Apple’s unencrypted PKCS#8 provider key.
+    pub key_path: PathBuf,
+    /// Apple-issued 10-character key identifier.
+    pub key_id: String,
+    /// Apple-issued 10-character developer team identifier.
+    pub team_id: String,
 }
 
 /// Apple App Attest environment, independent of the APNs transport environment.
@@ -44,6 +57,9 @@ pub struct Config {
     pub endpoint_quota_max_deliveries: i64,
     /// Server-owned dogfood application identity and APNs transport.
     pub profile: AppProfileConfig,
+    /// Optional production-only APNs provider key. When absent, production
+    /// delivery reuses the profile key for backward compatibility.
+    pub production_apns_token: Option<ApnsTokenConfig>,
     pub database_url: String,
     pub app_attest_root_cert_path: PathBuf,
     /// Ordered current key first, followed by decrypt-only predecessors.
@@ -128,7 +144,38 @@ fn parse_profile(e: &HashMap<String, String>) -> Result<AppProfileConfig, Config
         Some(_) => return Err(ConfigError::Invalid("BUZZ_PUSH_APP_ATTEST_ENVIRONMENT")),
     };
     let apns_topic = required(topic_key)?.to_owned();
-    let apns_cert_path = PathBuf::from(required(cert_key)?);
+    let token_keys = [
+        "BUZZ_PUSH_APNS_KEY_PATH",
+        "BUZZ_PUSH_APNS_KEY_ID",
+        "BUZZ_PUSH_APNS_TEAM_ID",
+    ];
+    let apns_token = if token_keys.iter().any(|key| e.contains_key(*key)) {
+        if e.get(cert_key).is_some_and(|value| !value.is_empty()) {
+            return Err(ConfigError::Invalid(cert_key));
+        }
+        let key_id = required(token_keys[1])?;
+        let team_id = required(token_keys[2])?;
+        if [key_id, team_id].iter().any(|value| {
+            value.len() != 10
+                || !value
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        }) {
+            return Err(ConfigError::Invalid("BUZZ_PUSH_APNS_KEY_ID"));
+        }
+        Some(ApnsTokenConfig {
+            key_path: PathBuf::from(required(token_keys[0])?),
+            key_id: key_id.to_owned(),
+            team_id: team_id.to_owned(),
+        })
+    } else {
+        None
+    };
+    let apns_cert_path = if apns_token.is_some() {
+        PathBuf::new()
+    } else {
+        PathBuf::from(required(cert_key)?)
+    };
     let apns_environment = match e.get(environment_key).map(String::as_str) {
         None | Some("production") => ApnsEnvironment::Production,
         Some("sandbox") => ApnsEnvironment::Sandbox,
@@ -138,9 +185,43 @@ fn parse_profile(e: &HashMap<String, String>) -> Result<AppProfileConfig, Config
         app_attest_app_id,
         app_attest_environment,
         apns_cert_path,
+        apns_token,
         apns_topic,
         apns_environment,
     })
+}
+
+fn parse_production_apns_token(
+    e: &HashMap<String, String>,
+) -> Result<Option<ApnsTokenConfig>, ConfigError> {
+    const PATH: &str = "BUZZ_PUSH_PRODUCTION_APNS_KEY_PATH";
+    const ID: &str = "BUZZ_PUSH_PRODUCTION_APNS_KEY_ID";
+    const TEAM: &str = "BUZZ_PUSH_PRODUCTION_APNS_TEAM_ID";
+    let present = [PATH, ID, TEAM].iter().any(|key| e.contains_key(*key));
+    if !present {
+        return Ok(None);
+    }
+    let required = |key: &'static str| {
+        e.get(key)
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(ConfigError::Missing(key))
+    };
+    let key_id = required(ID)?;
+    let team_id = required(TEAM)?;
+    if [key_id, team_id].iter().any(|value| {
+        value.len() != 10
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    }) {
+        return Err(ConfigError::Invalid(ID));
+    }
+    Ok(Some(ApnsTokenConfig {
+        key_path: PathBuf::from(required(PATH)?),
+        key_id: key_id.to_owned(),
+        team_id: team_id.to_owned(),
+    }))
 }
 
 impl Config {
@@ -196,6 +277,7 @@ impl Config {
         let endpoint_quota_max_deliveries =
             bounded_positive("BUZZ_PUSH_ENDPOINT_QUOTA_MAX_DELIVERIES", 10, 10_000)?;
         let profile = parse_profile(e)?;
+        let production_apns_token = parse_production_apns_token(e)?;
         let bind_addr = e
             .get("BUZZ_PUSH_BIND_ADDR")
             .map(String::as_str)
@@ -216,6 +298,7 @@ impl Config {
             endpoint_quota_window_seconds,
             endpoint_quota_max_deliveries,
             profile,
+            production_apns_token,
             database_url: req(e, "DATABASE_URL")?.to_owned(),
             app_attest_root_cert_path: req(e, "BUZZ_PUSH_APP_ATTEST_ROOT_CERT_PATH")?.into(),
             grant_keys,
@@ -227,6 +310,54 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn token_profile_requires_complete_exclusive_credentials() {
+        let mut env = base();
+        env.remove("BUZZ_PUSH_DOGFOOD_APNS_CERT_PATH");
+        env.insert("BUZZ_PUSH_APNS_KEY_PATH".into(), "/provider.p8".into());
+        assert!(Config::from_map(&env).is_err());
+        env.insert("BUZZ_PUSH_APNS_KEY_ID".into(), "KEY1234567".into());
+        env.insert("BUZZ_PUSH_APNS_TEAM_ID".into(), "TEAM123456".into());
+        assert!(Config::from_map(&env).unwrap().profile.apns_token.is_some());
+        env.insert(
+            "BUZZ_PUSH_DOGFOOD_APNS_CERT_PATH".into(),
+            "/identity.pem".into(),
+        );
+        assert!(Config::from_map(&env).is_err());
+    }
+
+    #[test]
+    fn production_provider_key_is_optional_but_requires_complete_credentials() {
+        let mut env = base();
+        assert!(Config::from_map(&env)
+            .unwrap()
+            .production_apns_token
+            .is_none());
+        env.insert(
+            "BUZZ_PUSH_PRODUCTION_APNS_KEY_PATH".into(),
+            "/production-provider.p8".into(),
+        );
+        env.insert(
+            "BUZZ_PUSH_PRODUCTION_APNS_KEY_ID".into(),
+            "PROD123456".into(),
+        );
+        env.insert(
+            "BUZZ_PUSH_PRODUCTION_APNS_TEAM_ID".into(),
+            "TEAM123456".into(),
+        );
+        let credentials = Config::from_map(&env)
+            .unwrap()
+            .production_apns_token
+            .unwrap();
+        assert_eq!(credentials.key_id, "PROD123456");
+        assert_eq!(
+            credentials.key_path,
+            PathBuf::from("/production-provider.p8")
+        );
+        env.remove("BUZZ_PUSH_PRODUCTION_APNS_TEAM_ID");
+        assert!(Config::from_map(&env).is_err());
+    }
+
     #[test]
     fn attestation_environment_is_explicit_and_build_gated() {
         let mut env = base();
