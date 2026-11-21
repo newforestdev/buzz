@@ -448,5 +448,5 @@ Zombie leases (e.g. `#h` after leaving a channel) are neutralized by match-time 
 - `exec` tag: executor encryption-key identifier for `kind:30350`
 - NIP-11 `supported_extensions`: contains `"nip-pl"` pre-numbering; descriptor object `push` as specified in Executor Discovery
 - Classes: `silent`, `default`, `time_sensitive`, `urgent`
-- `h_grammar` values: `"uuid-v4-lowercase"` (initial entry; origins may register additional grammars with this NIP)
+- `h_grammar` values: `"uuid-v4-lowercase"` and `"uuid-v4-or-v5-lowercase"` (canonical lowercase UUIDs of either version; origins may register additional grammars with this NIP)
 - Public APNs gateway profile: base URL `https://push.buzz.xyz`; app profile `buzz-ios-dogfood`; wire version `1`

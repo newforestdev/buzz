@@ -300,7 +300,7 @@ fn validate_filter(
     for value in h.into_iter().flatten() {
         check_string(value, limits.max_string_len)?;
         let uuid = uuid::Uuid::parse_str(value).map_err(|_| "invalid h tag".to_string())?;
-        if uuid.get_version_num() != 4 || uuid.to_string() != *value {
+        if !matches!(uuid.get_version_num(), 4 | 5) || uuid.to_string() != *value {
             return Err("invalid h tag".into());
         }
     }
@@ -739,6 +739,27 @@ mod tests {
         limits.max_h = 2;
         limits.max_tag_values = 1;
         assert!(validate_plaintext(&body, &limits).is_ok());
+    }
+
+    #[test]
+    fn channel_filter_accepts_canonical_v4_and_v5_only() {
+        for (id, accepted) in [
+            ("123e4567-e89b-42d3-a456-426614174000", true),
+            ("123e4567-e89b-52d3-a456-426614174000", true),
+            ("123e4567-e89b-12d3-a456-426614174000", false),
+            ("123E4567-E89B-52D3-A456-426614174000", false),
+            ("not-a-channel", false),
+        ] {
+            let json = format!(
+                r##"{{"v":1,"origin":"o","generation":1,"active":true,"app_profile":"p","transport":"apns","endpoint":"token","subscriptions":[{{"filter":{{"kinds":[9],"#h":["{id}"]}},"class":"default"}}]}}"##
+            );
+            let body = parse_plaintext(&json, 4096).unwrap();
+            assert_eq!(
+                validate_plaintext(&body, &limits()).is_ok(),
+                accepted,
+                "{id}"
+            );
+        }
     }
 
     #[test]
